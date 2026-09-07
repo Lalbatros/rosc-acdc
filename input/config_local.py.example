@@ -1,0 +1,47 @@
+"""Template for input/config_local.py — copy this file to input/config_local.py and fill in
+real values for your environment. input/config_local.py is git-ignored and overrides the
+generic defaults in rosc_acdc/config.py.
+"""
+
+# ---------------------------------------------------------------------------
+# General run flags
+# ---------------------------------------------------------------------------
+Sens = 0                # Perform Sensitivity Analysis
+SA = 0                   # Perform Security Analysis
+cgmes_zip = ""           # path to the CGMES zip export, e.g. r"input\MY_TSO_20260101T0000Z_00.zip"
+xiidm_file = 0            # 0 - loads the cgmes_zip file, saves xiidm_file with same name and location, 1-loads xiidm file with same name and location
+CON_OPT = 0               # 0-Use only NCC con from json_file, 1- Use both NCC and RCC con, 2- Use only RCC con from json_file_rcc
+
+# CONTINGENCY FILE (To Be Modified to CO XML)
+json_file = ""           # e.g. r"input\myoutages.json"
+json_file_rcc = ""       # e.g. r"input\RCC_outages.json"
+
+# ---------------------------------
+# --------RAO PART-----------------
+RAO_RUN = 0    # Perform OpenRAO
+CRAC_BUFF = 0  # 1-CRAC from buffer, dont write it as json (so no read/write time)
+CON_FCNEC = 1  # Consider contingencies in flowCNEC definition, 0 means only base case flows are considered
+
+# Randomly select MGE and CON to test NCC, RCC, NCC+RCC performance
+RANDOM_SEL = 0   # SELECT RANDOMLY - 1
+rNoCON = 800     # NO of random con
+rNoRCC = 1500    # NO of random mon for RCC
+rNoNCC = 1500    # NO of random opt for NCC
+rand_seed = 0    # 0 for no seed
+NCC_MON = False  # Should NCC Circuits be monitored?
+NCC_OPT = True   # Should NCC Circuits be optimized?
+RCC_MON = True   # Should RCC Circuits be monitored?
+RCC_OPT = False  # Should RCC Circuits be optimized?
+mod_crac = 0     # modified crac to change CBCO applied only to 0 injectionRA item, test only, keep this 0
+mod_crac_cnec_id = ""  # only used if mod_crac is truthy
+save_result = 1  # save rao result as json file
+SA_Thres = 80    # % threshold for using CBCO from AC - SA
+input_crac = ""  # path to crac.json
+inputs_RA = ""   # path to an excel defining RAs.
+logging_PSB = 0  # Enable debug logging infor for pypowsybl
+
+# Network-element UUIDs to ignore. Example:
+ignore_mge_list = [
+    "my_uuid1",
+    "my_uuid2"
+]
