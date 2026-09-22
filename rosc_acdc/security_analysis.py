@@ -1,4 +1,4 @@
-"""AC/DC security (contingency) analysis and the resulting AC vs DC comparison dataset."""
+"""Per-model security (contingency) analysis and the resulting comparison dataset."""
 
 import logging
 import time
@@ -7,39 +7,41 @@ import numpy as np
 import pandas as pd
 import pypowsybl as pp
 
-from rosc_acdc import config
+from rosc_acdc import config, models
 from rosc_acdc.paths import output_path
 
 logger = logging.getLogger(__name__)
 
 
-def run_security_analysis(security_analysis, network):
-    """Run the DC then AC security analyses, logging their timings."""
-    report_dc = pp.report.ReportNode()
-    report_ac = pp.report.ReportNode()
+def run_security_analysis(security_analysis, network, model_specs, reference):
+    """Run one security analysis per model and return {name: (result, elapsed seconds)}.
 
-    t0 = time.perf_counter()
-    result_dc = security_analysis.run_dc(network, report_node=report_dc)
-    con_analysis = time.perf_counter() - t0
-    logger.info("DC contingency analysis time: %.3f s", con_analysis)
+    The reference model runs last: the first run of the batch pays the JVM warm-up, and the
+    Performance table is easier to read across runs when that cost always lands on the same
+    model. Results themselves do not depend on the order (the analyses do not write back to
+    the network), only the timings do.
+    """
+    ordered = ([spec for spec in model_specs if spec.name != reference]
+               + [spec for spec in model_specs if spec.name == reference])
 
-    t0 = time.perf_counter()
-    result_ac = security_analysis.run_ac(network, report_node=report_ac)
-    ac_con_analysis = time.perf_counter() - t0
-    logger.info("AC contingency analysis time: %.3f s", ac_con_analysis)
+    results = {}
+    for spec in ordered:
+        report = pp.report.ReportNode()
+        runner = security_analysis.run_dc if spec.dc else security_analysis.run_ac
+        t0 = time.perf_counter()
+        result = runner(network, parameters=models.build_sa_parameters(spec), report_node=report)
+        elapsed = time.perf_counter() - t0
+        logger.info("%s contingency analysis time: %.3f s", spec.name, elapsed)
+        results[spec.name] = (result, elapsed)
 
-    logger.info(
-        "DC CURRENT violations %d",
-        len(result_dc.limit_violations[result_dc.limit_violations["limit_type"] == "CURRENT"]),
-    )
-    logger.info(
-        "AC CURRENT violations %d",
-        len(result_ac.limit_violations[result_ac.limit_violations["limit_type"] == "CURRENT"]),
-    )
-    logger.info("Post-contingency DC cases: %d", len(result_dc.post_contingency_results))
-    logger.info("Post-contingency AC cases: %d", len(result_ac.post_contingency_results))
+    for name, (result, _) in results.items():
+        violations = result.limit_violations
+        logger.info("%s CURRENT violations %d",
+                    name, len(violations[violations["limit_type"] == "CURRENT"]))
+    for name, (result, _) in results.items():
+        logger.info("Post-contingency %s cases: %d", name, len(result.post_contingency_results))
 
-    return result_dc, result_ac, con_analysis, ac_con_analysis
+    return results
 
 
 def branch_results(result, lines, transformers):
@@ -54,55 +56,91 @@ def branch_results(result, lines, transformers):
         columns={"transformer_id": "subject_id", "level_2": "side"})
     tr3["Elm_Type"] = "3-Winding Transformer"
 
+    # Note: branch_results has one index level more than the stacked side, so for branches the
+    # side lands in "level_3" and the rename above is a no-op - they keep side=NaN until
+    # build_shortlist_and_full_comparison fills it from level_3, while 3W transformers get
+    # "side" here. That also makes the join labels differ between the two; existing behaviour.
     results = pd.concat([branches, tr3], ignore_index=True)
     keys = ["subject_id", "contingency_id", "side"]
     return results.loc[results.groupby(keys, dropna=False)["i"].idxmin()].reset_index(drop=True)
 
 
-def build_side_comparison(result_dc, result_ac, lines, transformers):
-    sides_dc = branch_results(result_dc, lines, transformers)
-    sides_dc.index = sides_dc[["subject_id", "side", "contingency_id"]].fillna("").astype(str).agg("_".join, axis=1)
-
-    sides_ac = branch_results(result_ac, lines, transformers)
-    sides_ac.index = sides_ac[["subject_id", "side", "contingency_id"]].fillna("").astype(str).agg("_".join, axis=1)
-
-    sides_dc.rename(columns={"i": "i_DC"}, inplace=True)
-    sides_ac = pd.concat([sides_ac, sides_dc[["i_DC"]]], axis=1)
-    return sides_ac
+def _side_index(frame):
+    return frame[["subject_id", "side", "contingency_id"]].fillna("").astype(str).agg("_".join, axis=1)
 
 
-def build_shortlist_and_full_comparison(limits, sides_ac, network, element_info):
-    """Build the SA threshold shortlist (for RAO CNEC selection) and the full AC/DC dataset.
+def build_side_comparison(sa_results, lines, transformers, reference):
+    """Join every other model's post-contingency current onto the reference model's rows.
+
+    The reference current stays in "i"; each other model contributes an "i_<name>" column.
+    """
+    sides = {}
+    for name, (result, _) in sa_results.items():
+        frame = branch_results(result, lines, transformers)
+        frame.index = _side_index(frame)
+        sides[name] = frame
+
+    comparison = sides[reference]
+    for name, frame in sides.items():
+        if name == reference:
+            continue
+        column = f"i_{name}"
+        comparison = pd.concat([comparison, frame[["i"]].rename(columns={"i": column})], axis=1)
+        missing = int(comparison[column].isna().sum())
+        if missing:
+            logger.warning(
+                "%s has no value on %d of %d rows: the %s and %s results did not align",
+                column, missing, len(comparison), reference, name,
+            )
+    return comparison
+
+
+def build_shortlist_and_full_comparison(limits, sides, network, element_info, model_names):
+    """Build the SA threshold shortlist (for RAO CNEC selection) and the full dataset.
+
+    The shortlist and "loading_pct" are the reference model's; each other model in
+    `model_names` adds its own deviation columns.
     """
     patl_all = limits[limits["acceptable_duration"] == -1]
     patl_all = patl_all.set_index(["element_id", "side"])["value"]
     patl_all = patl_all[patl_all > 1]
 
-    sides_ac = sides_ac.copy()
-    sides_ac["patl"] = sides_ac.set_index(["subject_id", "side"]).index.map(patl_all)
-    sides_ac["loading_pct"] = sides_ac["i"] / sides_ac["patl"] * 100
+    sides = sides.copy()
+    sides["patl"] = sides.set_index(["subject_id", "side"]).index.map(patl_all)
+    sides["loading_pct"] = sides["i"] / sides["patl"] * 100
 
-    base_i = pd.concat([
-        network.get_lines()[["i1", "i2"]].rename(columns={"i1": "ONE", "i2": "TWO"}),
-        network.get_2_windings_transformers()[["i1", "i2"]].rename(columns={"i1": "ONE", "i2": "TWO"}),
-    ]).stack().rename("i").reset_index().rename(columns={"level_0": "subject_id", "level_1": "side"})
+    # N-state rows. These used to read i1/i2 back from the network after the DC load flow, where
+    # they are unset, so the rows never survive the loading filter below. Models now run in their
+    # own variants and leave the initial state untouched, so that read would no longer return
+    # missing values: the currents are blanked here to keep the rows as inert as they were.
+    # Giving them real base-case currents is a separate, deliberate change - it feeds RAO input.
+    base_i = (
+        pd.concat([
+            network.get_lines()[["i1", "i2"]],
+            network.get_2_windings_transformers()[["i1", "i2"]],
+        ])
+        .rename(columns={"i1": "ONE", "i2": "TWO"})
+        .assign(ONE=np.nan, TWO=np.nan)
+        .stack().rename("i").reset_index()
+        .rename(columns={"level_0": "subject_id", "level_1": "side"})
+    )
     base_i["contingency_id"] = None  # N-state
 
-    sides_ac_all = pd.concat([base_i, sides_ac], ignore_index=True)
-    sides_ac_all["side"] = sides_ac_all["side"].fillna(sides_ac_all["level_3"])
-    sides_ac_all["patl"] = sides_ac_all.set_index(["subject_id", "side"]).index.map(patl_all)
-    sides_ac_all["loading_pct"] = sides_ac_all["i"] / sides_ac_all["patl"] * 100
-    sides_ac_all["subject_name"] = sides_ac_all["subject_id"].map(element_info["name"].drop_duplicates())
+    sides_all = pd.concat([base_i, sides], ignore_index=True)
+    sides_all["side"] = sides_all["side"].fillna(sides_all["level_3"])
+    sides_all["patl"] = sides_all.set_index(["subject_id", "side"]).index.map(patl_all)
+    sides_all["loading_pct"] = sides_all["i"] / sides_all["patl"] * 100
+    sides_all["subject_name"] = sides_all["subject_id"].map(element_info["name"].drop_duplicates())
 
     shortlist_con_mge = (
-        sides_ac_all.dropna(subset=["patl"])
-        .loc[sides_ac_all["loading_pct"] > config.SA_Thres,
+        sides_all.dropna(subset=["patl"])
+        .loc[sides_all["loading_pct"] > config.SA_Thres,
              ["contingency_id", "subject_id", "subject_name", "side", "i", "patl", "loading_pct"]]
         .sort_values("loading_pct", ascending=False)
     )[["contingency_id", "subject_id", "subject_name"]]
 
     subject_id_exclude = (
-        sides_ac_all.groupby("subject_id")["loading_pct"]
+        sides_all.groupby("subject_id")["loading_pct"]
         .agg(["min", "max", "mean"])
         .query("max >= 95 and (max - min)/mean <= 0.01")
         .index
@@ -116,16 +154,19 @@ def build_shortlist_and_full_comparison(limits, sides_ac, network, element_info)
         config.SA_Thres, len(subject_id_exclude), len(shortlist_con_mge),
     )
 
-    sides_ac_all = sides_ac_all[sides_ac_all["loading_pct"] > config.SA_ACTIVE_THRESHOLD_PCT]
-    sides_ac_all["i - i_DC"] = sides_ac_all["i"].sub(sides_ac_all["i_DC"])
-    sides_ac_all["(i - i_DC)/patl %"] = sides_ac_all["i - i_DC"].div(sides_ac_all["patl"]).mul(100)
+    sides_all = sides_all[sides_all["loading_pct"] > config.SA_ACTIVE_THRESHOLD_PCT]
+    for name in model_names:
+        sides_all[f"i - i_{name}"] = sides_all["i"].sub(sides_all[f"i_{name}"])
+        sides_all[f"(i - i_{name})/patl %"] = (
+            sides_all[f"i - i_{name}"].div(sides_all["patl"]).mul(100)
+        )
 
-    sides_ac_all["Loading_Bin"] = pd.cut(
-        sides_ac_all["loading_pct"],
+    sides_all["Loading_Bin"] = pd.cut(
+        sides_all["loading_pct"],
         bins=[50, 60, 70, 80, 90, 100, np.inf],
         labels=["50-60%", "60-70%", "70-80%", "80-90%", "90-100%", "100%+"],
     )
 
-    sides_ac_all[sides_ac_all["loading_pct"] > 80].to_excel(output_path("AC_DC_Contingency_Comparison.xlsx"))
+    sides_all[sides_all["loading_pct"] > 80].to_excel(output_path("AC_DC_Contingency_Comparison.xlsx"))
 
-    return shortlist_con_mge, sides_ac_all, patl_all
+    return shortlist_con_mge, sides_all, patl_all

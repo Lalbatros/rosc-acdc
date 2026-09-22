@@ -6,6 +6,8 @@ the defaults below via the import at the bottom of this file). See
 input/config_local.py.example for the list of keys and how to fill them in.
 """
 
+from rosc_acdc.models import ModelSpec
+
 # ---------------------------------------------------------------------------
 # General run flags
 # ---------------------------------------------------------------------------
@@ -65,9 +67,43 @@ BASE_CASE_ACTIVE_THRESHOLD_PCT = 50
 SA_ACTIVE_THRESHOLD_PCT = 50
 
 # ---------------------------------------------------------------------------
+# Models being compared
+# ---------------------------------------------------------------------------
+# Each ModelSpec is one way of solving the network. The load flow, KPI, security analysis
+# and plotting stages all iterate over MODELS, so comparing a further variant (say DC with
+# another provider option) is a change here rather than a change in code.
+#
+#   name                    unique label, used as-is in column names and plot legends
+#   dc                      True -> DC load flow and DC security analysis, False -> AC
+#   parameters              pp.loadflow.Parameters kwargs, e.g. {"distributed_slack": False};
+#                           "dc" is not accepted here, it comes from the field above
+#   provider_parameters     OpenLoadFlow *load flow* options (str -> str), merged onto the
+#                           provider defaults, e.g. {"maxNewtonRaphsonIterations": "30"}
+#   sa_provider_parameters  OpenLoadFlow *security analysis* options (str -> str), e.g.
+#                           {"threadCount": "1"} - a separate namespace from the load flow
+#                           options above
+#
+# pypowsybl ignores unknown provider parameter keys silently, so models.validate_models
+# rejects them (and a key put in the wrong bucket) at start-up, before the network loads.
+#
+# Note: {"dcFastMode": "true"} is the best-known option of that last namespace, but it cannot
+# be used here - it fails with "MatrixException: Row index out of bound" whenever the security
+# analysis carries the operator strategies contingencies.py registers (it is fine on plain
+# contingencies). See input/config_local.py.example.
+MODELS = [
+    ModelSpec("AC", dc=False),
+    ModelSpec("DC", dc=True),
+]
+
+# The model every other model is compared against; must be one of the MODELS names.
+# All KPIs are asymmetric (false negatives, missed overload volume, margin error), so the
+# comparison is reference-vs-others rather than all pairs.
+REFERENCE_MODEL = "AC"
+
+# ---------------------------------------------------------------------------
 # Local overrides (git-ignored, real values for this environment)
 # ---------------------------------------------------------------------------
 try:
-    from input.config_local import *  # noqa: F401,F403
+    from input.config_local import *
 except ImportError:
     pass

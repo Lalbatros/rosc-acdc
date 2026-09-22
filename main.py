@@ -1,4 +1,4 @@
-"""AC vs DC load flow / contingency-analysis comparison study - entry point.
+"""Multi-model (AC vs DC and variants) load flow / contingency-analysis comparison study - entry point.
 """
 
 import logging
@@ -17,6 +17,7 @@ from rosc_acdc import (
     kpis,
     loadflow,
     logging_setup,
+    models,
     network_io,
     plotting,
     security_analysis,
@@ -26,65 +27,68 @@ from rosc_acdc import (
 logger = logging.getLogger(__name__)
 
 
+def _model_label(spec):
+    """"DC" for a model named after its mode, "DC_fast (DC)" for one that is not."""
+    mode = "DC" if spec.dc else "AC"
+    return spec.name if spec.name == mode else f"{spec.name} ({mode})"
+
+
 def main():
     log_path = logging_setup.configure_logging()
     logger.info("Logging to %s", log_path)
-    
+
+    # Validated before the network is loaded: a bad model spec should not cost a load.
+    model_specs = config.MODELS
+    reference = config.REFERENCE_MODEL
+    models.validate_models(model_specs, reference)
+    compared_models = [spec.name for spec in model_specs if spec.name != reference]
+    logger.info(
+        "Models: %s | reference: %s",
+        ", ".join(_model_label(spec) for spec in model_specs), reference,
+    )
+
     network = network_io.load_network()
 
-    # --- AC load flow ---
-    ac_result, ac_lf_time = loadflow.run_ac(network)
+    hv_lines, rcc_lines, hv_transformers, rcc_transformers, hv_transformers3, rcc_transformers3 = (
+        network_io.get_network_items(network)
+    )
+    items = {
+        "lines": hv_lines,
+        "transformers": hv_transformers,
+        "transformers3": hv_transformers3,
+    }
 
-    buses = network.get_buses().fillna(0)
+    # --- Load flow per model ---
+    # Each model runs in its own variant, so the element frames fetched below are unaffected by
+    # the runs and only have to be fetched once.
+    runs = loadflow.run_all_models(network, model_specs, items)
+
     lines = network.get_lines().fillna(0)
     transformers = network.get_2_windings_transformers().fillna(0)
-    transformers3 = network.get_3_windings_transformers().fillna(0)
-
-    hv_lines, rcc_lines, hv_transformers, rcc_transformers, hv_transformers3, rcc_transformers3 = (
-        network_io.get_network_items(network)
-    )
-
-    ac_ln_mva = loadflow.branch_apparent_power(hv_lines)
-    ac_tr_mva = loadflow.branch_apparent_power(hv_transformers)
-    ac_tr3_mva = loadflow.branch_apparent_power(hv_transformers3)
-
-    # --- DC load flow ---
-    dc_result, dc_lf_time = loadflow.run_dc(network)
-
-    buses = network.get_buses().fillna(0)
-    hv_lines, rcc_lines, hv_transformers, rcc_transformers, hv_transformers3, rcc_transformers3 = (
-        network_io.get_network_items(network)
-    )
     generators = network.get_generators().fillna(0)
     ptcs = network.get_phase_tap_changers().fillna(0)
-
-    dc_ln_mva = loadflow.branch_apparent_power(hv_lines)
-    dc_tr_mva = loadflow.branch_apparent_power(hv_transformers)
-    dc_tr3_mva = loadflow.branch_apparent_power(hv_transformers3)
-
     limits = network.get_loading_limits().reset_index()
 
-    (
-        lines_cmp, transformers_cmp, transformers3_cmp,
-        final_lines_id, final_tr_id, final_tr3_id,
-    ) = loadflow.build_base_case_comparison(
-        limits, hv_lines, hv_transformers, hv_transformers3,
-        ac_ln_mva, ac_tr_mva, ac_tr3_mva,
-        dc_ln_mva, dc_tr_mva, dc_tr3_mva,
-    )
+    # --- Base case (N-0) comparison ---
+    base_case_by_kind, kept_ids = loadflow.build_base_case_comparison(limits, items, runs, reference)
+    base_case_df = pd.concat(base_case_by_kind.values())
 
-    base_case_df = pd.concat([lines_cmp, transformers_cmp, transformers3_cmp])
-    base_case_comparison = kpis.prepare_comparison(
-        base_case_df, ac_value_col="AC LF", dc_value_col="DC LF", limit_col="PATL",
-        ac_loading_col="AC LF %", dc_loading_col="DC LF %",
-    )
-    kpis.log_all_priority1_kpis(
-        "Base Case (N-0)", base_case_comparison, id_col=pd.Series(base_case_df.index, index=base_case_df.index),
+    base_case_comparisons = {
+        name: kpis.prepare_comparison(
+            base_case_df,
+            reference_value_col=f"{reference} LF", model_value_col=f"{name} LF", limit_col="PATL",
+            reference_loading_col=f"{reference} LF %", model_loading_col=f"{name} LF %",
+        )
+        for name in compared_models
+    }
+    kpis.log_all_kpis_for_models(
+        "Base Case (N-0)", base_case_comparisons, reference,
+        id_col=pd.Series(base_case_df.index, index=base_case_df.index),
     )
 
     # --- Sensitivity analysis (optional) ---
     if config.Sens:
-        sensitivity.run_sensitivity_analyses(network, final_lines_id, generators, ptcs)
+        sensitivity.run_sensitivity_analyses(network, kept_ids["lines"], generators, ptcs)
 
     # --- Contingency scenarios ---
     data = contingencies.load_contingency_data()
@@ -106,39 +110,43 @@ def main():
     contingencies.add_contingencies_and_actions(sa, data, valid_ids)
 
     shortlist_con_mge = None
-    sides_ac_all = None
+    sides_all = None
     patl_all = None
-    con_analysis = ac_con_analysis = None
+    reference_con_analysis = None
+
+    timings = {f"{spec.name} loadflow (s)": runs[spec.name].lf_time for spec in model_specs}
 
     if config.SA:
-        result_dc, result_ac, con_analysis, ac_con_analysis = security_analysis.run_security_analysis(sa, network)
-        sides_ac = security_analysis.build_side_comparison(result_dc, result_ac, lines, transformers)
-        shortlist_con_mge, sides_ac_all, patl_all = security_analysis.build_shortlist_and_full_comparison(
-            limits, sides_ac, network, element_info,
+        sa_results = security_analysis.run_security_analysis(sa, network, model_specs, reference)
+        sides = security_analysis.build_side_comparison(sa_results, lines, transformers, reference)
+        shortlist_con_mge, sides_all, patl_all = security_analysis.build_shortlist_and_full_comparison(
+            limits, sides, network, element_info, compared_models,
         )
 
-        sa_comparison = kpis.prepare_comparison(
-            sides_ac_all, ac_value_col="i", dc_value_col="i_DC", limit_col="patl",
-            ac_loading_col="loading_pct",
-        )
-        kpis.log_all_priority1_kpis(
-            "Contingency (SA)", sa_comparison,
-            id_col=sides_ac_all["subject_id"], group_col=sides_ac_all["contingency_id"],
+        sa_comparisons = {
+            name: kpis.prepare_comparison(
+                sides_all,
+                reference_value_col="i", model_value_col=f"i_{name}", limit_col="patl",
+                reference_loading_col="loading_pct",
+            )
+            for name in compared_models
+        }
+        kpis.log_all_kpis_for_models(
+            "Contingency (SA)", sa_comparisons, reference,
+            id_col=sides_all["subject_id"], group_col=sides_all["contingency_id"],
         )
 
-        kpis.log_kpi_table("Performance", kpis.performance_kpis({
-            "AC loadflow (s)": ac_lf_time,
-            "DC loadflow (s)": dc_lf_time,
-            "DC contingency analysis (s)": con_analysis,
-            "AC contingency analysis (s)": ac_con_analysis,
-        }))
+        timings.update({
+            f"{name} contingency analysis (s)": elapsed
+            for name, (_, elapsed) in sa_results.items()
+        })
+        reference_con_analysis = sa_results[reference][1]
 
-        plotting.plot_sa_comparison(sides_ac_all)
+        kpis.log_kpi_table("Performance", kpis.performance_kpis(timings))
+        if compared_models:  # nothing to plot when the reference is the only model
+            plotting.plot_sa_comparison(sides_all, reference, compared_models)
     else:
-        kpis.log_kpi_table("Performance", kpis.performance_kpis({
-            "AC loadflow (s)": ac_lf_time,
-            "DC loadflow (s)": dc_lf_time,
-        }))
+        kpis.log_kpi_table("Performance", kpis.performance_kpis(timings))
 
     if not config.RAO_RUN:
         return
@@ -179,7 +187,9 @@ def main():
     )
 
     rao_crac = runner.load_crac(network, crac)
-    result, rao_time = runner.run_rao(network, rao_crac, len(crac["flowCnecs"]), ac_con_analysis)
+    result, rao_time = runner.run_rao(
+        network, rao_crac, len(crac["flowCnecs"]), reference_con_analysis,
+    )
 
     if config.save_result:
         runner.save_and_process_result(result)

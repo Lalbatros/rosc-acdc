@@ -45,3 +45,26 @@ ignore_mge_list = [
     "my_uuid1",
     "my_uuid2"
 ]
+
+# ---------------------------------------------------------------------------
+# Models being compared (optional - the default is plain AC vs plain DC)
+# ---------------------------------------------------------------------------
+# Only needed to compare more than the default two models, or to change the parameters of
+# one of them. See rosc_acdc/config.py for what each ModelSpec field means. Unknown provider
+# parameter keys are rejected at start-up, as pypowsybl would otherwise ignore them silently
+# (note that dcFastMode is a security-analysis option, not a load flow one).
+#
+# from rosc_acdc.models import ModelSpec
+#
+# MODELS = [
+#     ModelSpec("AC", dc=False),
+#     ModelSpec("DC", dc=True),
+#     ModelSpec("DC_1thread", dc=True, sa_provider_parameters={"threadCount": "1"}),
+#     ModelSpec("DC_noslack", dc=True, parameters={"distributed_slack": False}),
+# ]
+# REFERENCE_MODEL = "AC"   # every other model is compared against this one
+#
+# Measured on this study's setup: sa_provider_parameters={"dcFastMode": "true"} fails with
+# "MatrixException: Row index out of bound" as soon as the security analysis carries the switch
+# actions and operator strategies that contingencies.add_contingencies_and_actions registers.
+# It runs fine on contingencies alone, so dcFastMode is only usable here without those actions.
