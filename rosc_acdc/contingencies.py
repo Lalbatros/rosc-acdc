@@ -166,10 +166,10 @@ def add_contingencies_and_actions(security_analysis, data, valid_ids):
             list_elements=df_equipment[df_equipment["Contingency"]==case_con]
             elements_ids = []
             for temploc in range(len(list_elements)):
-                if list_elements["mRID"].iloc[temploc] in valid_ids:
-                    elements_ids.append(list_elements["mRID"].iloc[temploc])
+                if list_elements["Equipment"].iloc[temploc] in valid_ids:
+                    elements_ids.append(list_elements["Equipment"].iloc[temploc])
                 else:
-                    missing.append(list_elements["mRID"].iloc[temploc])
+                    missing.append(list_elements["Equipment"].iloc[temploc])
 
             if elements_ids:
                 k_con+=1
