@@ -2,10 +2,10 @@
 
 import os
 
-OUTPUT_DIR = "output"
+from rosc_acdc import config
 
 
 def output_path(filename: str) -> str:
-    """Return a path under OUTPUT_DIR for a generated artifact, creating the directory if needed."""
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    return os.path.join(OUTPUT_DIR, filename)
+    """Return a path under the configured output folder, creating the directory if needed."""
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    return os.path.join(config.OUTPUT_DIR, filename)

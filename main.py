@@ -14,6 +14,7 @@ import seaborn as sns
 from rosc_acdc import (
     config,
     contingencies,
+    kpi_workbook,
     kpis,
     loadflow,
     logging_setup,
@@ -56,6 +57,14 @@ def main():
         "lines": hv_lines,
         "transformers": hv_transformers,
         "transformers3": hv_transformers3,
+    }
+    # The same shape over every element rather than the HV subset: the base case compares the
+    # HV circuits above, while the security analysis monitors the RCC ones too and the KPI
+    # workbook has to attribute all of them to a country and voltage level.
+    all_items = {
+        "lines": pd.concat([hv_lines, rcc_lines]),
+        "transformers": pd.concat([hv_transformers, rcc_transformers]),
+        "transformers3": pd.concat([hv_transformers3, rcc_transformers3]),
     }
 
     # --- Load flow per model ---
@@ -109,12 +118,19 @@ def main():
     element_info.index.name = "subject_id"
 
     sa.add_monitored_elements(branch_ids=branch_ids, three_windings_transformer_ids=tr3_ids)
-    contingencies.add_contingencies_and_actions(sa, data, valid_ids)
+    # How many contingencies were registered on the security analysis - fewer than the scenario
+    # file holds, since a scenario whose elements are all absent from the network adds none.
+    # This feeds the KPI workbook's N_Contingencies.
+    _missing, contingencies_registered = contingencies.add_contingencies_and_actions(
+        sa, data, valid_ids,
+    )
 
     shortlist_con_mge = None
     sides_all = None
     patl_all = None
     reference_con_analysis = None
+    sa_comparisons = {}
+    sa_times = {}
 
     timings = {f"{spec.name} loadflow (s)": runs[spec.name].lf_time for spec in model_specs}
 
@@ -138,9 +154,9 @@ def main():
             id_col=sides_all["subject_id"], group_col=sides_all["contingency_id"],
         )
 
+        sa_times = {name: elapsed for name, (_, elapsed) in sa_results.items()}
         timings.update({
-            f"{name} contingency analysis (s)": elapsed
-            for name, (_, elapsed) in sa_results.items()
+            f"{name} contingency analysis (s)": elapsed for name, elapsed in sa_times.items()
         })
         reference_con_analysis = sa_results[reference][1]
 
@@ -149,6 +165,21 @@ def main():
             plotting.plot_sa_comparison(sides_all, reference, compared_models)
     else:
         kpis.log_kpi_table("Performance", kpis.performance_kpis(timings))
+
+    # --- KPI workbook, one per reference/model pair (optional) ---
+    if config.KPI_WORKBOOK:
+        kpi_workbook.write_workbooks(
+            network, runs, reference, compared_models, limits, all_items,
+            base_case_comparisons, base_case_df.index,
+            n_elements_evaluated=len(branch_ids) + len(tr3_ids),
+            # Zero when SA is off: the contingencies were registered but never run, and
+            # reporting the registered count would overstate what this run computed.
+            n_contingencies=contingencies_registered if config.SA else 0,
+            # All three are absent when SA is off, and the workbooks then report the base
+            # case alone.
+            sa_comparisons=sa_comparisons, sa_sides=sides_all, sa_times=sa_times,
+            single_sided_elements=single_sided_elements,
+        )
 
     if not config.RAO_RUN:
         return

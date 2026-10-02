@@ -1,10 +1,15 @@
 
 docs/
+# Keep the directories themselves in Git but ignore all generated/runtime contents.
 input/*
+!input/
+!input/.gitkeep
 !input/__init__.py
 !input/config_local.py.example
 logs/
-output/
+output/*
+!output/
+!output/.gitkeep
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

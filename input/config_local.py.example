@@ -68,3 +68,61 @@ ignore_mge_list = [
 # "MatrixException: Row index out of bound" as soon as the security analysis carries the switch
 # actions and operator strategies that contingencies.add_contingencies_and_actions registers.
 # It runs fine on contingencies alone, so dcFastMode is only usable here without those actions.
+
+# ---------------------------------------------------------------------------
+# KPI workbook (optional)
+# ---------------------------------------------------------------------------
+# Off by default, like Sens / SA / RAO_RUN. Set to 1 to write one workbook per compared
+# model: each one reports KPI_Data (one row per Country x Case x VoltageLevel), the
+# computation times, a capped Raw_Sample extract, five dimension sheets, the Dim_KPI
+# catalog and a Parameters sheet reporting the values below back.
+KPI_WORKBOOK = 0
+
+# Loading above which an element counts as in violation (>). Shared with the KPI log tables,
+# so changing it moves the logged False Negatives / Missed Overload Rate too.
+KPI_VIOLATION_THRESHOLD_PCT = 100
+
+# Loading the *reference* model has to reach for an element to enter the near-limit KPIs
+# (>=). This selects a population; the threshold above decides pass/fail. Neither is
+# SA_Thres, which is the RAO CNEC shortlist cutoff.
+KPI_NEAR_LIMIT_THRESHOLD_PCT = 90
+
+# N for the Top-N critical element overlap KPI (K16) and the TopN_N column. Note K16 divides
+# by N, not by the number of elements ranked, so a population smaller than N cannot reach
+# 100%.
+KPI_TOP_N = 5
+
+# Elements whose binding side is below this nominal voltage never enter the workbook.
+KPI_MIN_VOLTAGE_LEVEL_KV = 100.0
+
+# Caps the Raw_Sample review sheet per scenario (one contingency, or the Case for the rows
+# that carry none), keeping the worst rows. Every KPI is still computed on the full
+# population, so this only trades workbook size against how much detail is reviewable.
+KPI_MAX_RECORDS_PER_SCENARIO = 100
+
+# Reported on the Parameters sheet only; nothing computes from them. The study runs a single
+# snapshot, so both are 1 here - they would size the BusinessDay / Timestamp dimensions of a
+# multi-run build.
+KPI_BUSINESS_DAYS_SIMULATED = 1
+KPI_TIMESTAMPS_PER_BUSINESS_DAY = 1
+
+# Reported on the Parameters sheet only. Perf_Computation's N_Contingencies carries the
+# number of contingencies the security analysis actually ran, not this value.
+KPI_CONTINGENCIES_PER_COUNTRY_VOLTAGE_LEVEL = 1
+
+# Display and labelling only; every flow figure in the workbook is a current in A.
+KPI_FLOW_UNIT = "A"
+
+# Reported as the Country of any element whose substation carries no country. CGMES takes the
+# country from the GeographicalRegion, which lives in the boundary (EQBD) file, so a model
+# imported without one resolves every country to this value.
+KPI_FALLBACK_COUNTRY = "UNKNOWN"
+
+# One workbook per compared model, overwritten on every run. {reference} and {model} are the
+# MODELS names, so the default AC/DC pair writes Core_AC_DC_KPI.xlsx and a third model gets
+# its own file beside it (Core_AC_DC_fast_KPI.xlsx).
+KPI_WORKBOOK_FILENAME_TEMPLATE = "Core_{reference}_{model}_KPI.xlsx"
+
+# Output folder for every generated artifact - plots, the SA comparison export, RAO CRACs and
+# the KPI workbooks alike - relative to where the tool runs from.
+OUTPUT_DIR = "output"

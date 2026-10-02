@@ -67,6 +67,65 @@ BASE_CASE_ACTIVE_THRESHOLD_PCT = 50
 SA_ACTIVE_THRESHOLD_PCT = 50
 
 # ---------------------------------------------------------------------------
+# KPI workbook
+#
+# One workbook per reference/model pair, written to OUTPUT_DIR by rosc_acdc.kpi_workbook.
+# The parameters below are read at run time and written back out to the workbook's own
+# `Parameters` tab after the run: that tab is a report of what the run used, never an input.
+#
+# Naming note: three unrelated loading thresholds already live in this file -
+# BASE_CASE_ACTIVE_THRESHOLD_PCT and SA_ACTIVE_THRESHOLD_PCT (population filters, 50) and
+# SA_Thres (the RAO CNEC shortlist cutoff, 80). None of them is the near-limit KPI
+# threshold. The KPI_ prefix keeps the two families apart.
+# ---------------------------------------------------------------------------
+KPI_WORKBOOK = 0  # Write the KPI workbook(s)
+
+# An element is in violation above this loading. Shared with the KPI log tables
+# (kpis.VIOLATION_THRESHOLD_PCT defaults from it), so the workbook and the logs agree.
+KPI_VIOLATION_THRESHOLD_PCT = 100
+
+# The near-limit KPIs look only at elements whose *reference* loading reaches this value
+# (>=). Distinct from the violation threshold above: this one selects a population, that
+# one decides pass/fail. Not to be confused with SA_Thres.
+KPI_NEAR_LIMIT_THRESHOLD_PCT = 90
+
+# N for the Top-N critical element overlap KPI (K16) and the TopN_N column.
+KPI_TOP_N = 5
+
+# Only elements whose binding side has at least this nominal voltage reach the workbook.
+KPI_MIN_VOLTAGE_LEVEL_KV = 100.0
+
+# Raw_Sample is a review sheet, not a full KPI table: it is capped per scenario to keep the
+# workbook a manageable size. Every KPI is still computed on the complete population.
+KPI_MAX_RECORDS_PER_SCENARIO = 100
+
+# Display and labelling only; every flow figure in the workbook is a current in A.
+KPI_FLOW_UNIT = "A"
+
+# Country code reported for an element whose substation carries no country. CGMES derives
+# the country from the GeographicalRegion, which lives in the boundary (EQBD) file, so a
+# model imported without one resolves every country to null.
+KPI_FALLBACK_COUNTRY = "UNKNOWN"
+
+# Reported in `Parameters` only. This build runs a single snapshot: one business day, one
+# timestamp. They would size the BusinessDay / Timestamp dimensions of a multi-run build.
+KPI_BUSINESS_DAYS_SIMULATED = 1
+KPI_TIMESTAMPS_PER_BUSINESS_DAY = 1
+
+# Reported in `Parameters` only. Perf_Computation's N_Contingencies reports the number of
+# contingencies the security analysis actually ran, not this value.
+KPI_CONTINGENCIES_PER_COUNTRY_VOLTAGE_LEVEL = 1
+
+# One workbook per pair, overwritten on every run: no versioning, no timestamp in the name.
+# {reference} and {model} are the MODELS names, so the AC/DC pair renders the agreed
+# Core_AC_DC_KPI.xlsx and any further model gets its own file beside it.
+KPI_WORKBOOK_FILENAME_TEMPLATE = "Core_{reference}_{model}_KPI.xlsx"
+
+# Output folder for every generated artifact (plots, SA export, RAO CRACs, KPI workbooks),
+# relative to where the tool runs from.
+OUTPUT_DIR = "output"
+
+# ---------------------------------------------------------------------------
 # Models being compared
 # ---------------------------------------------------------------------------
 # Each ModelSpec is one way of solving the network. The load flow, KPI, security analysis
