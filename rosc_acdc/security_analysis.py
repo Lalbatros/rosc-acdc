@@ -45,6 +45,15 @@ def run_security_analysis(security_analysis, network, model_specs, reference):
 
 
 def branch_results(result, lines, transformers):
+    """One row per (element, contingency, side) with that side's current in A.
+
+    Both sides are kept as separate observations: `side` is part of the group key below, so the
+    idxmin only deduplicates repeated rows within a single side and never reduces one side
+    against the other. Each row is then paired with its own side's PATL in
+    build_shortlist_and_full_comparison(), which is what CIM terminal-specific current limits
+    require - a "worst case across sides" reduction would pick the wrong side, since the lower
+    current sits on the higher-voltage side, which also carries the lower Ampere rating.
+    """
     branches = result.branch_results[["i1", "i2"]].rename(columns={"i1": "ONE", "i2": "TWO"}).stack().rename(
         "i").reset_index().rename(columns={"branch_id": "subject_id", "level_2": "side"})
     branches["Elm_Type"] = np.select(
@@ -124,6 +133,21 @@ def build_shortlist_and_full_comparison(limits, sides, network, element_info, mo
         .stack().rename("i").reset_index()
         .rename(columns={"level_0": "subject_id", "level_1": "side"})
     )
+
+    # 3-winding transformers are stacked on their own: concatenated with the two-sided frames
+    # above they would give every line a THREE column, and stack() keeps those empty rows.
+    # They are monitored by the security analysis (tr3_ids in main.py) but were missing from
+    # the N-state population entirely; their currents are blanked like the branches' above, so
+    # this completes the row set without giving the N-state real base-case currents.
+    base_i3 = (
+        network.get_3_windings_transformers()[["i1", "i2", "i3"]]
+        .rename(columns={"i1": "ONE", "i2": "TWO", "i3": "THREE"})
+        .assign(ONE=np.nan, TWO=np.nan, THREE=np.nan)
+        .stack().rename("i").reset_index()
+        .rename(columns={"level_0": "subject_id", "level_1": "side"})
+    )
+
+    base_i = pd.concat([base_i, base_i3], ignore_index=True)
     base_i["contingency_id"] = None  # N-state
 
     sides_all = pd.concat([base_i, sides], ignore_index=True)

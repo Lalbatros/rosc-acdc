@@ -61,7 +61,7 @@ def main():
     # --- Load flow per model ---
     # Each model runs in its own variant, so the element frames fetched below are unaffected by
     # the runs and only have to be fetched once.
-    runs = loadflow.run_all_models(network, model_specs, items)
+    runs = loadflow.run_all_models(network, model_specs)
 
     lines = network.get_lines().fillna(0)
     transformers = network.get_2_windings_transformers().fillna(0)
@@ -70,7 +70,9 @@ def main():
     limits = network.get_loading_limits().reset_index()
 
     # --- Base case (N-0) comparison ---
-    base_case_by_kind, kept_ids = loadflow.build_base_case_comparison(limits, items, runs, reference)
+    base_case_by_kind, kept_ids, single_sided_elements = loadflow.build_base_case_comparison(
+        limits, items, runs, reference,
+    )
     base_case_df = pd.concat(base_case_by_kind.values())
 
     base_case_comparisons = {
