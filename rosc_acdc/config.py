@@ -141,6 +141,11 @@ OUTPUT_DIR = "output"
 #   sa_provider_parameters  OpenLoadFlow *security analysis* options (str -> str), e.g.
 #                           {"threadCount": "1"} - a separate namespace from the load flow
 #                           options above
+#   parameters_file         path to a PowSyBl load flow parameters JSON (the format
+#                           pp.loadflow.Parameters.to_json() writes), e.g.
+#                           "input/lf_parameters.json"; the starting point of both the load
+#                           flow and the security analysis, under the two dicts above.
+#                           Its "dc" is ignored, the dc field wins
 #
 # pypowsybl ignores unknown provider parameter keys silently, so models.validate_models
 # rejects them (and a key put in the wrong bucket) at start-up, before the network loads.

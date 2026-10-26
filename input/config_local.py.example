@@ -54,12 +54,20 @@ ignore_mge_list = [
 # parameter keys are rejected at start-up, as pypowsybl would otherwise ignore them silently
 # (note that dcFastMode is a security-analysis option, not a load flow one).
 #
+# parameters_file points a model at a PowSyBl load flow parameters JSON (the format
+# pp.loadflow.Parameters.to_json() writes). It is read strictly: a misspelled key or an
+# invalid value stops the run at start-up. parameters / provider_parameters apply on top.
+#
 # from rosc_acdc.models import ModelSpec
 #
+# LF_PARAMETERS_FILE = r"input\lf_parameters.json"
+#
 # MODELS = [
-#     ModelSpec("AC", dc=False),
-#     ModelSpec("DC", dc=True),
-#     ModelSpec("DC_1thread", dc=True, sa_provider_parameters={"threadCount": "1"}),
+#     ModelSpec("AC", dc=False, parameters_file=LF_PARAMETERS_FILE),
+#     ModelSpec("DC", dc=True, parameters_file=LF_PARAMETERS_FILE),
+#     ModelSpec("DC_default", dc=True),   # pypowsybl defaults, for comparison
+#     ModelSpec("DC_1thread", dc=True, parameters_file=LF_PARAMETERS_FILE,
+#               sa_provider_parameters={"threadCount": "1"}),
 #     ModelSpec("DC_noslack", dc=True, parameters={"distributed_slack": False}),
 # ]
 # REFERENCE_MODEL = "AC"   # every other model is compared against this one
