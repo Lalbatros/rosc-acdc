@@ -76,7 +76,8 @@ def main():
     transformers = network.get_2_windings_transformers().fillna(0)
     generators = network.get_generators().fillna(0)
     ptcs = network.get_phase_tap_changers().fillna(0)
-    limits = network.get_loading_limits().reset_index()
+    # Every consumer compares currents, so MVA / MW ratings are converted to A once, here.
+    limits = loadflow.limits_in_amperes(network.get_loading_limits().reset_index(), network)
 
     # --- Base case (N-0) comparison ---
     base_case_by_kind, kept_ids, single_sided_elements = loadflow.build_base_case_comparison(

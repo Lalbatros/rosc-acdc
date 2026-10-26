@@ -71,12 +71,61 @@ def branch_current_dc(elements_df, voltage_levels):
     return _by_side(currents)
 
 
+def _side_nominal_voltages(network):
+    """Nominal voltage (kV) per (element_id, side), for lines and 2-/3-winding transformers."""
+    nominal_v = network.get_voltage_levels()["nominal_v"]
+    per_side = []
+    for elements in (network.get_lines(), network.get_2_windings_transformers(),
+                     network.get_3_windings_transformers()):
+        for side, suffix in SIDE_COLUMN_SUFFIX.items():
+            column = f"voltage_level{suffix}_id"
+            if column in elements:
+                per_side.append(pd.Series(
+                    elements[column].map(nominal_v).to_numpy(),
+                    index=pd.MultiIndex.from_arrays(
+                        [elements.index, [side] * len(elements)], names=["element_id", "side"],
+                    ),
+                ))
+    return pd.concat(per_side)
+
+
+def limits_in_amperes(limits, network):
+    """`limits` with every MVA / MW limit converted to a current in A on its own side.
+
+    The study compares currents and the RAO writes its CNEC thresholds in A, so a power limit
+    is converted rather than ignored: I = S / (sqrt(3) * Vnom), with Vnom the nominal voltage
+    of the limit's own side - the convention branch_current_dc uses. An ACTIVE_POWER limit
+    goes through the same formula, i.e. at cos phi = 1. Converted rows become type "CURRENT"
+    and keep their original type in "source_type". A power limit on an element with no
+    per-side nominal voltage here (anything but lines and 2-/3-winding transformers, e.g. tie
+    lines and boundary lines, which the study does not monitor) cannot be converted and is
+    dropped.
+    """
+    power = limits["type"].isin(["APPARENT_POWER", "ACTIVE_POWER"]).to_numpy()
+    keys = pd.MultiIndex.from_frame(limits[["element_id", "side"]])
+    vnom = _side_nominal_voltages(network).reindex(keys).to_numpy(dtype=float)
+    converted = limits.assign(
+        source_type=limits["type"],
+        type=np.where(power, "CURRENT", limits["type"]),
+        value=np.where(power, limits["value"].to_numpy() * 1000 / (np.sqrt(3) * vnom),
+                       limits["value"]),
+    )
+    unconvertible = power & np.isnan(vnom)
+    logger.info(
+        "Limits: %d MVA/MW limit(s) converted to A, %d dropped (no per-side nominal voltage)",
+        int((power & ~unconvertible).sum()), int(unconvertible.sum()),
+    )
+    return converted[~unconvertible]
+
+
 def permanent_current_limits(limits):
     """One permanent CURRENT rating per (element_id, side); the most restrictive wins.
 
     CIM current limits are terminal-specific, so a branch can be rated differently on each
     side. Only CURRENT-type permanent limits are selected: comparing a current against an
     MVA or MW rating would corrupt every loading, margin and violation flag derived from it.
+    Pass `limits` through limits_in_amperes() first, so that power ratings take part
+    converted to A instead of being left out.
     """
     patl = limits[(limits["acceptable_duration"] == -1) & (limits["type"] == "CURRENT")]
     return patl.groupby(["element_id", "side"])["value"].min()
