@@ -10,7 +10,7 @@ Sens = 0                # Perform Sensitivity Analysis
 SA = 0                   # Perform Security Analysis
 cgmes_zip = ""           # path to the CGMES zip export, e.g. r"input\MY_TSO_20260101T0000Z_00.zip"
 xiidm_file = 0            # 0 - loads the cgmes_zip file, saves xiidm_file with same name and location, 1-loads xiidm file with same name and location
-CON_OPT = 0               # 0-Use only NCC con from json_file, 1- Use both NCC and RCC con, 2- Use only RCC con from json_file_rcc
+CON_OPT = 0               # 0-Use only NCC con from json_file, 1- Use both NCC and RCC con, 2- Use only RCC con from json_file_rcc, 3- Use CO XML
 
 # CONTINGENCY FILE (To Be Modified to CO XML)
 json_file = ""           # e.g. r"input\myoutages.json"
