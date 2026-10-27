@@ -33,6 +33,11 @@ class ModelSpec:
         sa_provider_parameters: OpenLoadFlow *security analysis* options (str -> str), e.g.
             ``{"dcFastMode": "true"}``. These are a separate namespace from the load flow
             ones; a key put in the wrong bucket is rejected by :func:`validate_models`.
+        parameters_file: path to a PowSyBl load flow parameters JSON, in the format
+            ``pp.loadflow.Parameters.to_json()`` writes. When set, it replaces the pypowsybl
+            defaults as the starting point of both the load flow and the security analysis;
+            ``parameters`` and ``provider_parameters`` still apply on top of it. The file's
+            own ``dc`` is ignored - it comes from the field above.
     """
 
     name: str
@@ -40,15 +45,33 @@ class ModelSpec:
     parameters: dict = field(default_factory=dict)
     provider_parameters: dict = field(default_factory=dict)
     sa_provider_parameters: dict = field(default_factory=dict)
+    parameters_file: str = ""
+
+
+def load_lf_parameters_file(path: str) -> pp.loadflow.Parameters:
+    """The ``pp.loadflow.Parameters`` stored in the JSON file at `path`.
+
+    pypowsybl's own reader is strict: an unknown key (top level or OpenLoadFlow) or an
+    invalid value raises, instead of being ignored. OpenLoadFlow keys the file leaves out
+    keep their defaults.
+    """
+    with open(path, encoding="utf-8") as f:
+        return pp.loadflow.Parameters.from_json(f.read())
 
 
 def build_lf_parameters(spec: ModelSpec) -> pp.loadflow.Parameters:
     """The ``pp.loadflow.Parameters`` for `spec`.
 
-    ``pp.loadflow.Parameters()`` already carries every OpenLoadFlow default, so the spec's
-    provider parameters are merged onto them instead of replacing them.
+    Layered as pypowsybl defaults -> ``spec.parameters_file`` -> the spec's own overrides.
+    Both starting points already carry every OpenLoadFlow parameter, so the spec's provider
+    parameters are merged onto them instead of replacing them.
     """
-    parameters = pp.loadflow.Parameters(**spec.parameters)
+    if spec.parameters_file:
+        parameters = load_lf_parameters_file(spec.parameters_file)
+    else:
+        parameters = pp.loadflow.Parameters()
+    for name, value in spec.parameters.items():
+        setattr(parameters, name, value)
     if spec.provider_parameters:
         parameters.provider_parameters = {
             **parameters.provider_parameters,
@@ -67,8 +90,13 @@ def build_sa_parameters(spec: ModelSpec) -> pp.security.Parameters:
     overrides runs on untouched defaults. Note that its default provider parameters (both the
     security-analysis ones and the nested load flow ones) are empty dicts, unlike
     ``pp.loadflow.Parameters()``, which is why they are merged rather than assigned.
+
+    A ``spec.parameters_file`` replaces the nested load flow parameters, so the security
+    analysis solves each contingency with the same settings as the base-case load flow.
     """
     parameters = pp.security.Parameters()
+    if spec.parameters_file:
+        parameters.load_flow_parameters = load_lf_parameters_file(spec.parameters_file)
     for name, value in spec.parameters.items():
         setattr(parameters.load_flow_parameters, name, value)
     if spec.provider_parameters:
@@ -120,6 +148,14 @@ def validate_models(model_specs, reference: str) -> None:
             pp.loadflow.Parameters(**spec.parameters)
         except Exception as error:  # TypeError for a bad kwarg, PyPowsyblError for a bad combination
             raise ValueError(f"model {spec.name!r}: invalid parameters: {error}") from error
+        if spec.parameters_file:
+            try:
+                load_lf_parameters_file(spec.parameters_file)
+            except Exception as error:  # OSError for a bad path, PyPowsyblError for bad content
+                raise ValueError(
+                    f"model {spec.name!r}: cannot load parameters_file "
+                    f"{spec.parameters_file!r}: {error}"
+                ) from error
 
         _check_provider_parameters(spec.name, spec.provider_parameters, "provider_parameters",
                                    lf_keys, "sa_provider_parameters", sa_keys)

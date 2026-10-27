@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pypowsybl as pp
 
-from rosc_acdc import config, models
+from rosc_acdc import config, loadflow, models
 from rosc_acdc.paths import output_path
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,15 @@ def run_security_analysis(security_analysis, network, model_specs, reference):
 
 
 def branch_results(result, lines, transformers):
+    """One row per (element, contingency, side) with that side's current in A.
+
+    Both sides are kept as separate observations: `side` is part of the group key below, so the
+    idxmin only deduplicates repeated rows within a single side and never reduces one side
+    against the other. Each row is then paired with its own side's PATL in
+    build_shortlist_and_full_comparison(), which is what CIM terminal-specific current limits
+    require - a "worst case across sides" reduction would pick the wrong side, since the lower
+    current sits on the higher-voltage side, which also carries the lower Ampere rating.
+    """
     branches = result.branch_results[["i1", "i2"]].rename(columns={"i1": "ONE", "i2": "TWO"}).stack().rename(
         "i").reset_index().rename(columns={"branch_id": "subject_id", "level_2": "side"})
     branches["Elm_Type"] = np.select(
@@ -61,12 +70,20 @@ def branch_results(result, lines, transformers):
     # build_shortlist_and_full_comparison fills it from level_3, while 3W transformers get
     # "side" here. That also makes the join labels differ between the two; existing behaviour.
     results = pd.concat([branches, tr3], ignore_index=True)
+    # pandas 3's stack() keeps the NaN currents pandas 2 dropped (e.g. DC results for a branch
+    # open at one end), and a group made only of them makes idxmin raise. Dropping them restores
+    # the pandas 2 behaviour; such a row then shows up in build_side_comparison's alignment
+    # warning as a missing value.
+    results = results.dropna(subset=["i"])
     keys = ["subject_id", "contingency_id", "side"]
     return results.loc[results.groupby(keys, dropna=False)["i"].idxmin()].reset_index(drop=True)
 
 
 def _side_index(frame):
-    return frame[["subject_id", "side", "contingency_id"]].fillna("").astype(str).agg("_".join, axis=1)
+    # Column-wise concatenation, not a row-wise "_".join: same keys, but a PanEU-sized SA has
+    # ~10 M rows and the row-wise version took the better part of an hour.
+    parts = frame[["subject_id", "side", "contingency_id"]].fillna("").astype(str)
+    return parts["subject_id"] + "_" + parts["side"] + "_" + parts["contingency_id"]
 
 
 def build_side_comparison(sa_results, lines, transformers, reference):
@@ -101,8 +118,10 @@ def build_shortlist_and_full_comparison(limits, sides, network, element_info, mo
     The shortlist and "loading_pct" are the reference model's; each other model in
     `model_names` adds its own deviation columns.
     """
-    patl_all = limits[limits["acceptable_duration"] == -1]
-    patl_all = patl_all.set_index(["element_id", "side"])["value"]
+    # The base case's rule: one CURRENT rating per (element, side), the most restrictive wins.
+    # A side can carry several permanent limits (PanEU tie lines have a placeholder current
+    # limit next to an MW one), and the index.map below needs a unique index.
+    patl_all = loadflow.permanent_current_limits(limits)
     patl_all = patl_all[patl_all > 1]
 
     sides = sides.copy()
@@ -124,6 +143,21 @@ def build_shortlist_and_full_comparison(limits, sides, network, element_info, mo
         .stack().rename("i").reset_index()
         .rename(columns={"level_0": "subject_id", "level_1": "side"})
     )
+
+    # 3-winding transformers are stacked on their own: concatenated with the two-sided frames
+    # above they would give every line a THREE column, and stack() keeps those empty rows.
+    # They are monitored by the security analysis (tr3_ids in main.py) but were missing from
+    # the N-state population entirely; their currents are blanked like the branches' above, so
+    # this completes the row set without giving the N-state real base-case currents.
+    base_i3 = (
+        network.get_3_windings_transformers()[["i1", "i2", "i3"]]
+        .rename(columns={"i1": "ONE", "i2": "TWO", "i3": "THREE"})
+        .assign(ONE=np.nan, TWO=np.nan, THREE=np.nan)
+        .stack().rename("i").reset_index()
+        .rename(columns={"level_0": "subject_id", "level_1": "side"})
+    )
+
+    base_i = pd.concat([base_i, base_i3], ignore_index=True)
     base_i["contingency_id"] = None  # N-state
 
     sides_all = pd.concat([base_i, sides], ignore_index=True)
